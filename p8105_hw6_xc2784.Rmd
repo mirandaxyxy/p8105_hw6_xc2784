@@ -12,7 +12,6 @@ library(broom)
 library(patchwork)
 library(modelr)
 
-set.seed(123)
 ```
 
 ### Problem 1
@@ -85,6 +84,7 @@ city_or <- homicides %>%
 city_or
 
 ```
+
 ```{r, fig.width = 6, fig.height = 8}
 library(ggplot2)
 
@@ -98,6 +98,11 @@ city_plot <- ggplot(city_ordered, aes(x = OR, y = city_state)) +
   geom_point() +
   geom_errorbarh(aes(xmin = conf.low, xmax = conf.high)) +
   geom_vline(xintercept = 1, linetype = "dashed") +
+    labs(
+      x = "Adjusted OR (Male vs Female Victims)",
+      y = "City, State",
+      title = "Adjusted Odds Ratios for Resolved Homicides by City"
+    ) +
   theme_minimal()
 
 city_plot
@@ -106,3 +111,92 @@ city_plot
 Most cities have ORs below 1, suggesting that homicides involving male victims tend to be solved at lower rates than those involving female victims once age and race are accounted for. A few cities, such as Albuquerque, Stockton, and Fresno, show ORs above 1, indicating the opposite pattern, but these are exceptions.
 However, most cities have ORs near 1, and their confidence intervals cross 1, suggesting there is little evidence of a statistically difference in resolved rates between male and female victims after adjusting for age and race.
 
+
+### Problem 2
+
+```{r}
+library(p8105.datasets)
+data("weather_df")
+
+weather <-
+  weather_df %>% 
+  filter(name == "CentralPark_NY") %>% 
+  drop_na(tmax, tmin, prcp)
+
+reg = lm(tmax ~ tmin + prcp, data = weather)
+reg %>% glance() %>% select(r.squared)
+reg %>% tidy()
+```
+```{r}
+
+set.seed(1)
+n_boot <- 5000
+
+boot_samples <-
+  weather %>%
+  modelr::bootstrap(n = n_boot, id = "strap_id")
+
+boot_results <-
+  boot_samples %>%
+  mutate(
+    fit  = map(strap, ~ lm(tmax ~ tmin + prcp, data = .x)),
+    gl   = map(fit, glance),
+    coef = map(fit, tidy)
+  ) %>%
+  mutate(
+    r_sq = map_dbl(gl, "r.squared"),
+    beta_ratio = map_dbl(
+      coef,
+      ~ {
+        tmp <- .x %>% select(term, estimate)
+        
+        b_tmin <- tmp %>%
+          filter(term == "tmin") %>%
+          pull(estimate)
+        
+        b_prcp <- tmp %>%
+          filter(term == "prcp") %>%
+          pull(estimate)
+        
+        b_tmin / b_prcp
+      }
+    )
+  ) %>%
+  select(strap_id, r_sq, beta_ratio)
+
+boot_results
+
+```
+
+```{r, fig.width = 10, fig.height = 6}
+p1 = boot_results %>%
+  ggplot(aes(x = r_sq)) +
+  geom_histogram() +
+  theme_minimal() +
+  labs(x = "R-squared", title = "Bootstrap distribution of R-squared")
+
+p2 = boot_results %>%
+  ggplot(aes(x = beta_ratio)) +
+  geom_histogram() +
+  theme_minimal() +
+  labs(x = "β1 / β2",
+       title = "Bootstrap distribution of beta ratio")
+
+p1+p2
+
+boot_results %>%
+  summarize(
+    r2_025  = quantile(r_sq, 0.025),
+    r2_975  = quantile(r_sq, 0.975),
+    br_025  = quantile(beta_ratio, 0.025),
+    br_974  = quantile(beta_ratio, 0.975)
+  )
+
+```
+From the bootstrap results:
+r2: 95% CI: [0.89, 0.93]
+𝛽1/𝛽2: 95% CI: [–5616.45, 4568.92]
+
+The bootstrap distribution of r2 is more concentrated and normally distributed, with most values falling around 0.91–0.93. This suggests that the fitted model gives similar r2 values across bootstrap samples.
+
+The bootstrap distribution of the beta ratio 𝛽1/𝛽2 is much more spread out, with values covering a very wide range and a tall spike near zero. This indicates that the ratio varies a lot from sample to sample, and its values can become quite large in magnitude. This happens because the coefficient for precipitation is close to zero and flips sign across samples
