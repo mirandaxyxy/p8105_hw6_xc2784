@@ -1,0 +1,108 @@
+---
+title: "p8105_hw6_xc2784"
+output: github_document
+date: "2025-12-03"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,message = FALSE,
+  warning = FALSE)
+library(tidyverse)
+library(broom)
+library(patchwork)
+library(modelr)
+
+set.seed(123)
+```
+
+### Problem 1
+
+```{r}
+raw = read_csv("https://raw.githubusercontent.com/washingtonpost/data-homicides/master/homicide-data.csv")
+```
+
+```{r}
+homicides <- raw %>%
+  mutate(
+    city_state = str_c(city, ", ", state),
+    solved = as.numeric(disposition == "Closed by arrest"),
+    victim_age = as.numeric(victim_age),
+    victim_sex  = fct_relevel(victim_sex, "Female"),
+    victim_race = fct_relevel(victim_race, "White")) %>% 
+  filter(
+    !(city == "Dallas" & state == "TX"),
+    !(city == "Phoenix" & state == "AZ"),
+    !(city == "Kansas City" & state == "MO"),
+    !(city == "Tulsa" & state == "AL"),
+    (victim_race %in% c("White", "Black")) 
+  ) %>% 
+    drop_na(
+    solved,
+    victim_age,
+    victim_sex,
+    victim_race
+  )
+```
+
+```{r}
+baltimore <- homicides %>%
+  filter(city_state == "Baltimore, MD")
+
+baltimore_lr <- glm(
+  solved ~ victim_age + victim_sex + victim_race,
+  data = baltimore,
+  family = binomial
+)
+
+baltimore_or <- tidy(baltimore_lr, conf.int = TRUE, exponentiate = TRUE) %>%
+ mutate(OR = estimate)%>%
+  select(term, OR, conf.low, conf.high)
+
+baltimore_or
+```
+
+In Baltimore, male victims’ homicide cases are 57% less likely to be resolved than those of female victims (adjusted OR = 0.43; 95% CI: 0.32–0.58), controlling for age and race.
+
+```{r}
+library(purrr)
+
+city_or <- homicides %>%
+  group_by(city_state) %>%
+  nest() %>%
+  mutate(
+    model = map(data, ~ glm(
+      solved ~ victim_age + victim_sex + victim_race,
+      data = .x, family = binomial
+    )),
+    results = map(model, ~ tidy(.x, conf.int = TRUE, exponentiate = TRUE))
+  ) %>%
+  unnest(results) %>%
+  filter(term == "victim_sexMale")  %>% 
+  mutate(OR = estimate)%>%
+  select(city_state, OR, conf.low, conf.high)
+  
+
+city_or
+
+```
+```{r, fig.width = 6, fig.height = 8}
+library(ggplot2)
+
+city_ordered <- city_or %>%
+  ungroup() %>% 
+  arrange(OR) %>% 
+  mutate(city_state = factor(city_state,levels = city_state))
+
+
+city_plot <- ggplot(city_ordered, aes(x = OR, y = city_state)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high)) +
+  geom_vline(xintercept = 1, linetype = "dashed") +
+  theme_minimal()
+
+city_plot
+```
+
+Most cities have ORs below 1, suggesting that homicides involving male victims tend to be solved at lower rates than those involving female victims once age and race are accounted for. A few cities, such as Albuquerque, Stockton, and Fresno, show ORs above 1, indicating the opposite pattern, but these are exceptions.
+However, most cities have ORs near 1, and their confidence intervals cross 1, suggesting there is little evidence of a statistically difference in resolved rates between male and female victims after adjusting for age and race.
+
